@@ -45,7 +45,6 @@ import {
   getUserPayments,
   getUserWishlist,
 } from "../queries/profile";
-import { string } from "zod";
 import { getHomeFeaturedCategories } from "../queries/home";
 import { retrieveProductDetailsOptimized } from "../queries/product-optimized";
 

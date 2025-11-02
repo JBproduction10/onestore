@@ -11,7 +11,6 @@ import {
 import { getRatingStatistics } from "./product";
 import { Store } from "@prisma/client";
 import { currentUser } from "@clerk/nextjs/server";
-import { use } from "react";
 
 /**
  * Retrieves optimized product details by product slug.
