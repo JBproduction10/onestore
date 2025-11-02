@@ -101,37 +101,17 @@ export const capturePayPalPayment = async (
         paymentStatus: "Failed",
       },
     });
-    //throw new Error("Payment capture failed.");
   }
 
-  // Upsert payment details record
-  const newPaymentDetails = await db.paymentDetails.upsert({
-    where: {
-      orderId,
-    },
-    update: {
-      paymentInetntId: paymentId,
-      status:
-        captureData.status === "COMPLETED" ? "Completed" : captureData.status,
-      amount: Number(
+  // Create payment details record
+  const newPaymentDetails = await db.paymentDetails.create({
+    data: {
+      transactionId: paymentId,
+      paymentStatus: captureData.status === "COMPLETED" ? "paid" : "unpaid",
+      totalPaid: Number(
         captureData.purchase_units[0].payments.captures[0].amount.value
       ),
-      currency:
-        captureData.purchase_units[0].payments.captures[0].amount.currency_code,
       paymentMethod: "Paypal",
-      userId: user.id,
-    },
-    create: {
-      paymentInetntId: paymentId,
-      status:
-        captureData.status === "COMPLETED" ? "Completed" : captureData.status,
-      amount: Number(
-        captureData.purchase_units[0].payments.captures[0].amount.value
-      ),
-      currency:
-        captureData.purchase_units[0].payments.captures[0].amount.currency_code,
-      paymentMethod: "Paypal",
-      orderId: orderId,
       userId: user.id,
     },
   });
@@ -143,12 +123,7 @@ export const capturePayPalPayment = async (
     },
     data: {
       paymentStatus: captureData.status === "COMPLETED" ? "Paid" : "Failed",
-      paymentMethod: "Paypal",
-      paymentDetails: {
-        connect: {
-          id: newPaymentDetails.id,
-        },
-      },
+      paymentDetailsId: newPaymentDetails.id,
     },
     include: {
       paymentDetails: true,

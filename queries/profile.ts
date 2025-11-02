@@ -12,6 +12,7 @@ import {
   ReviewFilter,
 } from "../lib/types";
 import { currentUser } from "@clerk/nextjs/server";
+import { Prisma } from "@prisma/client";
 
 import { subMonths, subYears } from "date-fns";
 
@@ -42,74 +43,56 @@ export const getUserOrders = async (
   const skip = (page - 1) * pageSize;
 
   // Construct the base query
-  const whereClause: {
-    AND: Array<{
-      userId?: string;
-      paymentStatus?: string;
-      orderStatus?: string;
-      createdAt?: { gte: Date };
-      OR?: Array<{
-        id?: { contains: string };
-        groups?: {
-          some: {
-            store?: { name?: { contains: string } };
-            items?: { some: { name?: { contains: string } } };
-          };
-        };
-      }>;
-    }>;
-  } = {
-    AND: [
-      {
-        userId: user.id,
-      },
-    ],
-  };
+  const whereConditions: Prisma.OrderWhereInput[] = [
+    {
+      userId: user.id,
+    },
+  ];
 
-  // Apply filters
+  // Apply filters - Note: Order model only has 'status' field, not separate paymentStatus/orderStatus
   if (filter === "unpaid")
-    whereClause.AND.push({ paymentStatus: PaymentStatus.Pending });
+    whereConditions.push({ paymentStatus: PaymentStatus.Pending });
   if (filter === "toShip")
-    whereClause.AND.push({ orderStatus: OrderStatus.Processing });
+    whereConditions.push({ status: "Processing" });
   if (filter === "shipped")
-    whereClause.AND.push({ orderStatus: OrderStatus.Shipped });
+    whereConditions.push({ status: "Shipped" });
   if (filter === "delivered")
-    whereClause.AND.push({ orderStatus: OrderStatus.Delivered });
+    whereConditions.push({ status: "Delivered" });
 
   // Apply period filter
   const now = new Date();
   if (period === "last-6-months") {
-    whereClause.AND.push({
+    whereConditions.push({
       createdAt: { gte: subMonths(now, 6) },
     });
   }
   if (period === "last-1-year")
-    whereClause.AND.push({ createdAt: { gte: subYears(now, 1) } });
+    whereConditions.push({ createdAt: { gte: subYears(now, 1) } });
   if (period === "last-2-years")
-    whereClause.AND.push({ createdAt: { gte: subYears(now, 2) } });
+    whereConditions.push({ createdAt: { gte: subYears(now, 2) } });
 
   // Apply search filter
   if (search.trim()) {
-    whereClause.AND.push({
+    whereConditions.push({
       OR: [
         {
           id: { contains: search }, // Search by order ID
         },
         {
-          groups: {
+          orderGroups: {
             some: {
               store: {
-                name: { contains: search }, // Search by store name (no mode here)
+                name: { contains: search },
               },
             },
           },
         },
         {
-          groups: {
+          orderGroups: {
             some: {
               items: {
                 some: {
-                  name: { contains: search }, // Search by product name (no mode here)
+                  name: { contains: search },
                 },
               },
             },
@@ -119,11 +102,15 @@ export const getUserOrders = async (
     });
   }
 
+  const whereClause: Prisma.OrderWhereInput = {
+    AND: whereConditions,
+  };
+
   // Fetch orders for the current page
   const orders = await db.order.findMany({
     where: whereClause,
     include: {
-      groups: {
+      orderGroups: {
         include: {
           items: true,
           _count: {
@@ -168,7 +155,7 @@ export const getUserOrders = async (
  * @access User
  * @param filter - A string to filter payments by method (e.g., "paypal", "credit-card").
  * @param period - A string representing the time range for payments (e.g., "last-6-months").
- * @param search - A string to search within payment details (e.g., paymentMethod or currency).
+ * @param search - A string to search within payment details (e.g., paymentMethod or transactionId).
  * @param page - The page number for pagination (default: 1).
  * @param pageSize - The number of records to return per page (default: 10).
  * @returns A Promise resolving to an object containing:
@@ -181,7 +168,7 @@ export const getUserOrders = async (
 export const getUserPayments = async (
   filter: PaymentTableFilter = "",
   period: PaymentTableDateFilter = "",
-  search = "" /* Search by Payment intent id */,
+  search = "" /* Search by Payment transaction id */,
   page: number = 1,
   pageSize: number = 10
 ) => {
@@ -195,60 +182,52 @@ export const getUserPayments = async (
   const skip = (page - 1) * pageSize;
 
   // Construct the base query
-  const whereClause: {
-    AND: Array<{
-      userId?: string;
-      paymentMethod?: string;
-      createdAt?: { gte: Date };
-      OR?: Array<{
-        id?: { contains: string };
-        paymentInetntId?: { contains: string };
-      }>;
-    }>;
-  } = {
-    AND: [
-      {
-        userId: user.id,
-      },
-    ],
-  };
+  const whereConditions: Prisma.PaymentDetailsWhereInput[] = [
+    {
+      userId: user.id,
+    },
+  ];
 
   // Apply filters
-  if (filter === "paypal") whereClause.AND.push({ paymentMethod: "Paypal" });
+  if (filter === "paypal") whereConditions.push({ paymentMethod: "Paypal" });
   if (filter === "credit-card")
-    whereClause.AND.push({ paymentMethod: "Stripe" });
+    whereConditions.push({ paymentMethod: "Stripe" });
 
   // Apply period filter
   const now = new Date();
   if (period === "last-6-months") {
-    whereClause.AND.push({
+    whereConditions.push({
       createdAt: { gte: subMonths(now, 6) },
     });
   }
   if (period === "last-1-year")
-    whereClause.AND.push({ createdAt: { gte: subYears(now, 1) } });
+    whereConditions.push({ createdAt: { gte: subYears(now, 1) } });
   if (period === "last-2-years")
-    whereClause.AND.push({ createdAt: { gte: subYears(now, 2) } });
+    whereConditions.push({ createdAt: { gte: subYears(now, 2) } });
 
   // Apply search filter
   if (search.trim()) {
-    whereClause.AND.push({
+    whereConditions.push({
       OR: [
         {
           id: { contains: search }, // Search by ID
         },
         {
-          paymentInetntId: { contains: search }, // Search by Payment intent ID
+          transactionId: { contains: search }, // Search by Payment transaction ID
         },
       ],
     });
   }
 
+  const whereClause: Prisma.PaymentDetailsWhereInput = {
+    AND: whereConditions,
+  };
+
   // Fetch payments for the current page
   const payments = await db.paymentDetails.findMany({
     where: whereClause,
     include: {
-      order: true,
+      orders: true,
     },
     take: pageSize, // Limit to page size
     skip, // Skip the orders of previous pages
@@ -296,7 +275,7 @@ export const getUserPayments = async (
 export const getUserReviews = async (
   filter: ReviewFilter = "",
   period: ReviewDateFilter = "",
-  search = "" /* Search by Payment intent id */,
+  search = "" /* Search by comment text */,
   page: number = 1,
   pageSize: number = 10
 ) => {
@@ -310,48 +289,43 @@ export const getUserReviews = async (
   const skip = (page - 1) * pageSize;
 
   // Construct the base query
-  const whereClause: {
-    AND: Array<{
-      userId?: string;
-      rating?: number;
-      createdAt?: { gte: Date };
-      review?: { contains: string };
-    }>;
-  } = {
-    AND: [
-      {
-        userId: user.id,
-      },
-    ],
-  };
+  const whereConditions: Prisma.ReviewWhereInput[] = [
+    {
+      userId: user.id,
+    },
+  ];
 
   // Apply filters
-  if (filter) whereClause.AND.push({ rating: parseFloat(filter) });
+  if (filter) whereConditions.push({ rating: parseFloat(filter) });
 
   // Apply period filter
   const now = new Date();
   if (period === "last-6-months") {
-    whereClause.AND.push({
+    whereConditions.push({
       createdAt: { gte: subMonths(now, 6) },
     });
   }
   if (period === "last-1-year")
-    whereClause.AND.push({ createdAt: { gte: subYears(now, 1) } });
+    whereConditions.push({ createdAt: { gte: subYears(now, 1) } });
   if (period === "last-2-years")
-    whereClause.AND.push({ createdAt: { gte: subYears(now, 2) } });
+    whereConditions.push({ createdAt: { gte: subYears(now, 2) } });
 
   // Apply search filter
   if (search.trim()) {
-    whereClause.AND.push({
-      review: { contains: search }, // Search by review text
+    whereConditions.push({
+      comment: { contains: search }, // Search by comment text
     });
   }
+
+  const whereClause: Prisma.ReviewWhereInput = {
+    AND: whereConditions,
+  };
 
   // Fetch reviews for the current page
   const reviews = await db.review.findMany({
     where: whereClause,
     include: {
-      images: true,
+      ReviewImage: true,
       user: true,
     },
     take: pageSize, // Limit to page size
@@ -430,26 +404,27 @@ export const getUserWishlist = async (
     skip,
   });
 
-  // Transform wishlist items into the desired structure
-
-  const formattedWishlist = wishlist.map((item: typeof wishlist[0]) => ({
-    id: item.product.id,
-    slug: item.product.slug,
-    name: item.product.name,
-    rating: item.product.rating,
-    sales: item.product.sales,
-    numReviews: item.product.numReviews,
-    variants: [
-      {
-        variantId: item.product.variants[0].id,
-        variantSlug: item.product.variants[0].slug,
-        variantName: item.product.variants[0].variantName,
-        images: item.product.variants[0].images,
-        sizes: item.product.variants[0].sizes,
-      },
-    ],
-    variantImages: [],
-  }));
+  // Transform wishlist items into the desired structure, filtering out null products
+  const formattedWishlist = wishlist
+    .filter(item => item.product !== null)
+    .map((item) => ({
+      id: item.product!.id,
+      slug: item.product!.slug,
+      name: item.product!.name,
+      rating: item.product!.rating,
+      sales: item.product!.sales,
+      numReviews: item.product!.numReviews,
+      variants: [
+        {
+          variantId: item.product!.variants[0].id,
+          variantSlug: item.product!.variants[0].slug,
+          variantName: item.product!.variants[0].variantName,
+          images: item.product!.variants[0].images,
+          sizes: item.product!.variants[0].sizes,
+        },
+      ],
+      variantImages: [],
+    }));
 
   // Fetch the total count of wishlist items for the query
   const totalCount = await db.wishlist.count({
@@ -495,7 +470,7 @@ export const getUserFollowedStores = async (
     where: {
       followers: {
         some: {
-          id: user.id,
+          userId: user.id,
         },
       },
     },
@@ -519,7 +494,7 @@ export const getUserFollowedStores = async (
     where: {
       followers: {
         some: {
-          id: user.id,
+          userId: user.id,
         },
       },
     },
@@ -529,7 +504,7 @@ export const getUserFollowedStores = async (
   const totalPages = Math.ceil(totalCount / pageSize);
 
   // Transform the stores into the required format
-  const stores = followedStores.map((store: typeof followedStores[0]) => ({
+  const stores = followedStores.map((store) => ({
     id: store.id,
     url: store.url,
     name: store.name,

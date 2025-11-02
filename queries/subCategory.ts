@@ -151,29 +151,29 @@ export const getSubcategories = async (
   limit: number | null,
   random: boolean = false
 ): Promise<SubCategory[]> => {
-  // Define SortOrder enum
-  enum SortOrder {
-    asc = "asc",
-    desc = "desc",
-  }
   try {
-    // Define the query options
-    const queryOptions = {
-      take: limit || undefined, // Use the provided limit or undefined for no limit
-      orderBy: random ? { createdAt: SortOrder.desc } : undefined, // Use SortOrder for ordering
-    };
-
-    // If random selection is required, use a raw query to randomize
     if (random) {
-      const subcategories = await db.$queryRaw<SubCategory[]>`
-    SELECT * FROM SubCategory
-    ORDER BY RAND()
-    LIMIT ${limit || 10} 
-    `;
-      return subcategories;
+      // For MongoDB, we need to fetch all and randomize in-memory
+      // or use aggregation pipeline (not directly supported by Prisma)
+      const allSubcategories = await db.subCategory.findMany();
+      
+      // Shuffle array using Fisher-Yates algorithm
+      const shuffled = [...allSubcategories];
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+      }
+      
+      // Return limited results
+      return shuffled.slice(0, limit || 10);
     } else {
-      // Otherwise, fetch subcategories based on the defined query options
-      const subcategories = await db.subCategory.findMany(queryOptions);
+      // Fetch subcategories based on the defined query options
+      const subcategories = await db.subCategory.findMany({
+        take: limit || undefined,
+        orderBy: {
+          createdAt: "desc",
+        },
+      });
       return subcategories;
     }
   } catch (error) {

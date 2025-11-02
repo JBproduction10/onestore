@@ -27,38 +27,39 @@ export const upsertReview = async (
     if (!productId) throw new Error("Product ID is required.");
     if (!review) throw new Error("Please provide review data.");
 
-    // check for existing review
+    // Check for existing review - only by productId and userId
     const existingReview = await db.review.findFirst({
       where: {
         productId,
         userId: user.id,
-        variant: review.variant,
       },
     });
 
-    let review_data: ReviewDetailsType = review;
-    if (existingReview) {
-      review_data = { ...review_data, id: existingReview.id };
-    }
+    // Map the review data to match Prisma schema
+    // Review model only has: id, rating, comment, productId, userId, ReviewImage
+    const reviewDataForDb = {
+      rating: review.rating,
+      comment: review.review, // Map 'review' field to 'comment'
+    };
+
     // Upsert review into the database
     const reviewDetails = await db.review.upsert({
       where: {
-        id: review_data.id,
+        id: existingReview?.id || "new", // Use existing ID or "new" for creation
       },
       update: {
-        ...review_data,
-        images: {
+        ...reviewDataForDb,
+        ReviewImage: {
           deleteMany: {},
-          create: review_data.images.map((img: { url: string; }) => ({
+          create: review.images.map((img: { url: string }) => ({
             url: img.url,
           })),
         },
-        userId: user.id,
       },
       create: {
-        ...review_data,
-        images: {
-          create: review_data.images.map((img: { url: string; }) => ({
+        ...reviewDataForDb,
+        ReviewImage: {
+          create: review.images.map((img: { url: string }) => ({
             url: img.url,
           })),
         },
@@ -66,7 +67,7 @@ export const upsertReview = async (
         userId: user.id,
       },
       include: {
-        images: true,
+        ReviewImage: true,
         user: true,
       },
     });
@@ -82,14 +83,14 @@ export const upsertReview = async (
     });
 
     const totalRating = productReviews.reduce(
-      (acc: number, rev: { rating: number; }) => acc + rev.rating,
+      (acc: number, rev: { rating: number }) => acc + rev.rating,
       0
     );
 
     const averageRating = totalRating / productReviews.length;
 
     // Update the product rating
-    const updatedProduct = await db.product.update({
+    await db.product.update({
       where: {
         id: productId,
       },
@@ -98,6 +99,7 @@ export const upsertReview = async (
         numReviews: productReviews.length, // Update the number of reviews
       },
     });
+
     const statistics = await getRatingStatistics(productId);
     const message = existingReview
       ? "Your review has been updated successfully!"

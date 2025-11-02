@@ -5,6 +5,22 @@ import { CartWithCartItemsType } from "../lib/types";
 import { currentUser } from "@clerk/nextjs/server";
 import { Coupon } from "@prisma/client";
 
+/**
+ * Applies a coupon to a cart for items belonging to the coupon's store.
+ *
+ * @param couponCode - The coupon code to apply.
+ * @param cartId - The ID of the cart to apply the coupon to.
+ * @returns A message indicating success or failure, along with the updated cart.
+ */
+
+/**
+ * Applies a coupon to a cart for items belonging to the coupon's store.
+ *
+ * @param couponCode - The coupon code to apply.
+ * @param cartId - The ID of the cart to apply the coupon to.
+ * @returns A message indicating success or failure, along with the updated cart.
+ */
+
 // Function: upsertCoupon
 // Description: Upserts a coupon into the database, updating it if it exists or creating a new one if not.
 // Permission Level: Seller only
@@ -201,14 +217,6 @@ export const deleteCoupon = async (couponId: string, storeUrl: string) => {
   }
 };
 
-/**
- * Applies a coupon to a cart for items belonging to the coupon's store.
- *
- * @param couponCode - The coupon code to apply.
- * @param cartId - The ID of the cart to apply the coupon to.
- * @returns A message indicating success or failure, along with the updated cart.
- */
-
 export const applyCoupon = async (
   couponCode: string,
   cartId: string
@@ -228,10 +236,15 @@ export const applyCoupon = async (
       throw new Error("Invalid coupon code.");
     }
 
+    // Ensure store exists
+    if (!coupon.store) {
+      throw new Error("Coupon store not found.");
+    }
+
     // Step 2: Validate the coupon's date range
     const currentDate = new Date();
     const startDate = new Date(coupon.startDate);
-    const endDate = new Date(coupon.endDate);
+    const endDate = new Date(coupon.expiryDate);
 
     if (currentDate < startDate || currentDate > endDate) {
       throw new Error("Coupon is expired or not yet active.");
@@ -261,7 +274,7 @@ export const applyCoupon = async (
     const storeId = coupon.storeId;
 
     const storeItems = cart.cartItems.filter(
-      (item: { storeId: string; }) => item.storeId === storeId
+      (item) => item.storeId === storeId
     );
 
     if (storeItems.length === 0) {
@@ -272,12 +285,18 @@ export const applyCoupon = async (
 
     // Step 6: Calculate the discount on the store's items
     const storeSubTotal = storeItems.reduce(
-      (acc: number, item: { price: number; quantity: number; }) => acc + item.price * item.quantity,
+      (acc, item) => {
+        const price = item.price ?? 0;
+        return acc + price * item.quantity;
+      },
       0
     );
 
     const storeShippingTotal = storeItems.reduce(
-      (acc: number, item: { shippingFee: number; }) => acc + item.shippingFee,
+      (acc, item) => {
+        const shippingFee = item.shippingFee ?? 0;
+        return acc + shippingFee;
+      },
       0
     );
 
@@ -306,11 +325,16 @@ export const applyCoupon = async (
       },
     });
 
+    // ✅ Add runtime check to ensure coupon.store is not null before returning
+    if (!updatedCart.coupon?.store) {
+      throw new Error("Failed to retrieve coupon store information.");
+    }
+
     return {
       message: `Coupon applied successfully. Discount: -$${discountedAmount.toFixed(
         2
       )} applied to items from ${coupon.store.name}.`,
-      cart: updatedCart,
+      cart: updatedCart as CartWithCartItemsType, // ✅ Type assertion
     };
   } catch (error) {
     throw error;

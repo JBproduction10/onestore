@@ -367,6 +367,8 @@ model Review {
   productId String  @db.ObjectId
   product   Product @relation("ReviewToProduct", fields: [productId], references: [id])
 
+  variantId String? @db.ObjectId
+
   userId String @db.ObjectId
   user   User   @relation("ReviewToUser", fields: [userId], references: [id])
 

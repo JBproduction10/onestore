@@ -61,48 +61,28 @@ export const createStripePayment = async (
 
     if (!order) throw new Error("Order not found.");
 
-    const updatedPaymentDetails = await db.paymentDetails.upsert({
-      where: {
-        orderId,
-      },
-      update: {
-        paymentInetntId: paymentIntent.id,
+    // Create payment details record
+    // Note: PaymentDetails schema has: transactionId, paymentMethod, paymentStatus, totalPaid
+    const newPaymentDetails = await db.paymentDetails.create({
+      data: {
+        transactionId: paymentIntent.id,
         paymentMethod: "Stripe",
-        amount: paymentIntent.amount,
-        currency: paymentIntent.currency,
-        status:
-          paymentIntent.status === "succeeded"
-            ? "Completed"
-            : paymentIntent.status,
-        userId: user.id,
-      },
-      create: {
-        paymentInetntId: paymentIntent.id,
-        paymentMethod: "Stripe",
-        amount: paymentIntent.amount,
-        currency: paymentIntent.currency,
-        status:
-          paymentIntent.status === "succeeded"
-            ? "Completed"
-            : paymentIntent.status,
-        orderId: orderId,
+        totalPaid: paymentIntent.amount / 100, // Convert cents back to dollars
+        paymentStatus:
+          paymentIntent.status === "succeeded" ? "paid" : "unpaid",
         userId: user.id,
       },
     });
 
     // Update the order with payment details
+    // Note: Order schema doesn't have paymentMethod field
     const updatedOrder = await db.order.update({
       where: {
         id: orderId,
       },
       data: {
         paymentStatus: paymentIntent.status === "succeeded" ? "Paid" : "Failed",
-        paymentMethod: "Stripe",
-        paymentDetails: {
-          connect: {
-            id: updatedPaymentDetails.id,
-          },
-        },
+        paymentDetailsId: newPaymentDetails.id,
       },
       include: {
         paymentDetails: true,

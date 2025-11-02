@@ -13,8 +13,9 @@ import {
 } from "./product";
 import { ShippingAddress } from "@prisma/client";
 
-const getCookie = (name: string, { cookies }: { cookies: ReturnType<typeof cookies> }) => {
-  return cookies.get(name)?.value;
+const getCookie = async (name: string) => {
+  const cookieStore = await cookies();
+  return cookieStore.get(name)?.value;
 };
 
 type ProductWithDetails = Product & {
@@ -79,42 +80,27 @@ export const followStore = async (storeId: string): Promise<boolean> => {
     if (!userData) throw new Error("User not found.");
 
     // Check if the user is already following the store
-    const storeWithFollower = await db.store.findFirst({
+    const storeWithFollower = await db.userFollowingStore.findFirst({
       where: {
-        id: storeId,
-        followers: {
-          some: {
-            id: user.id,
-          },
-        },
+        storeId: storeId,
+        userId: user.id,
       },
     });
 
     if (storeWithFollower) {
       // Unfollow the store and return false
-      await db.store.update({
+      await db.userFollowingStore.delete({
         where: {
-          id: storeId,
-        },
-        data: {
-          followers: {
-            disconnect: { id: userData.id },
-          },
+          id: storeWithFollower.id,
         },
       });
       return false;
     } else {
       // Follow the store and return true
-      await db.store.update({
-        where: {
-          id: storeId,
-        },
+      await db.userFollowingStore.create({
         data: {
-          followers: {
-            connect: {
-              id: userData.id,
-            },
-          },
+          storeId: storeId,
+          userId: user.id,
         },
       });
       return true;
@@ -182,14 +168,14 @@ export const saveUserCart = async (
             include: {
               sizes: {
                 where: {
-                  id: sizeId,
+                  id: sizeId!,
                 },
               },
               images: true,
             },
           },
         },
-      });
+      }) as ProductWithDetails;
 
       if (
         !product ||
@@ -212,7 +198,7 @@ export const saveUserCart = async (
         : size.price;
 
       // Calculate Shipping details
-      const countryCookie = getCookie("userCountry", { cookies });
+      const countryCookie = await getCookie("userCountry");
 
       let details = {
         shippingFee: 0,
@@ -424,6 +410,11 @@ export const placeOrder = async (
   const cartItems = cart.cartItems;
   const cartCoupon = cart.coupon; // The coupon, if it exists
 
+  // Ensure countryId is not null
+  if (!shippingAddress.countryId) {
+    throw new Error("Shipping address must have a valid country.");
+  }
+
   // Fetch product, variant, and size data from the database for validation
   const validatedCartItems = await Promise.all(
     cartItems.map(async (cartProduct: { productId: any; variantId: any; sizeId: any; quantity: any; }) => {
@@ -432,7 +423,7 @@ export const placeOrder = async (
       // Fetch the product, variant, and size from the database
       const product = await db.product.findUnique({
         where: {
-          id: productId,
+          id: productId || undefined,
         },
         include: {
           store: true,
@@ -443,12 +434,12 @@ export const placeOrder = async (
           },
           variants: {
             where: {
-              id: variantId,
+              id: variantId || undefined,
             },
             include: {
               sizes: {
                 where: {
-                  id: sizeId,
+                  id: sizeId || undefined,
                 },
               },
               images: true,
@@ -478,16 +469,13 @@ export const placeOrder = async (
         : size.price;
 
       // Calculate Shipping details
-      const countryId = shippingAddress.countryId;
+      const countryId = shippingAddress.countryId!;
 
       const temp_country = await db.country.findUnique({
         where: {
-          id: countryId ?? undefined,
+          id: countryId,
         },
       });
-      if (!countryId) {
-        throw new Error("Country ID is missing or invalid.");
-      }
 
       if (!temp_country)
         throw new Error("Failed to get Shipping details for order.");
@@ -505,17 +493,16 @@ export const placeOrder = async (
         isFreeShipping: false,
       };
 
-      if (country) {
-        const temp_details = await getShippingDetails(
-          product.shippingFeeMethod,
-          country,
-          product.store,
-          product.freeShipping
-        );
-        if (typeof temp_details !== "boolean") {
-          details = temp_details;
-        }
+      const temp_details = await getShippingDetails(
+        product.shippingFeeMethod,
+        country,
+        product.store,
+        product.freeShipping
+      );
+      if (typeof temp_details !== "boolean") {
+        details = temp_details;
       }
+
       let shippingFee = 0;
       const { shippingFeeMethod } = product;
       if (shippingFeeMethod === "ITEM") {
@@ -568,6 +555,7 @@ export const placeOrder = async (
       shippingFees: 0, // Will calculate below
       totalAmount: 0, // Will calculate below
       total: 0, // Will calculate below
+      shippingAddressId: shippingAddress.id,
     },
   });
 
@@ -590,7 +578,7 @@ export const placeOrder = async (
     const { shippingService, deliveryTimeMin, deliveryTimeMax } =
       await getDeliveryDetailsForStoreByCountry(
         storeId,
-        shippingAddress.countryId
+        shippingAddress.countryId ?? undefined
       );
 
     // Check coupon store
@@ -656,17 +644,9 @@ export const placeOrder = async (
       subTotal: orderTotalPrice - orderShippingFee,
       shippingFees: orderShippingFee,
       total: orderTotalPrice,
+      totalAmount: orderTotalPrice,
     },
   });
-
-  // Delete cart
-  /*
-  await db.cart.delete({
-    where: {
-      id: cartId,
-    },
-  });
-  */
 
   return {
     orderId: order.id,
@@ -751,7 +731,7 @@ export const updateCartWithLatest = async (
       const size = variant.sizes[0];
 
       // Calculate Shipping details
-      const countryCookie = getCookie("userCountry", { cookies });
+      const countryCookie = await getCookie("userCountry");
 
       let details = {
         shippingService: product.store.defaultShippingService,
@@ -878,7 +858,7 @@ export const updateCheckoutProductstWithLatest = async (
       // Fetch the product, variant, and size from the database
       const product = await db.product.findUnique({
         where: {
-          id: productId,
+          id: productId ?? undefined,
         },
         include: {
           store: true,
@@ -889,12 +869,12 @@ export const updateCheckoutProductstWithLatest = async (
           },
           variants: {
             where: {
-              id: variantId,
+              id: variantId ?? undefined,
             },
             include: {
               sizes: {
                 where: {
-                  id: sizeId,
+                  id: sizeId ?? undefined,
                 },
               },
               images: true,
@@ -917,7 +897,7 @@ export const updateCheckoutProductstWithLatest = async (
       const size = variant.sizes[0];
 
       // Calculate Shipping details
-      const countryCookie = getCookie("userCountry", { cookies });
+      const countryCookie = await getCookie("userCountry");
 
       const country = address
         ? address
@@ -1018,7 +998,7 @@ export const updateCheckoutProductstWithLatest = async (
       if (applicableStoreItems.length > 0) {
         // Calculate subtotal for the coupon's store (including shipping fees)
         const storeSubTotal = applicableStoreItems.reduce(
-          (acc, item) => acc + item.price * item.quantity + item.shippingFee,
+          (acc, item) => acc + (item.price ?? 0) * item.quantity + (item.shippingFee ?? 0),
           0
         );
         // Apply coupon discount to the store's subtotal
@@ -1047,7 +1027,7 @@ export const updateCheckoutProductstWithLatest = async (
     },
   });
 
-  if (!cart) throw new Error("Somethign went wrong !");
+  if (!cart) throw new Error("Something went wrong!");
 
   return cart as CartWithCartItemsType;
 };
