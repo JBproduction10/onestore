@@ -1,13 +1,12 @@
 "use server";
 
 // DB
-import { db } from "../lib/db";
+import { db } from "@/lib/db";
 import {
-  CountryWithShippingRatesType,
   StoreDefaultShippingType,
   StoreStatus,
   StoreType,
-} from "../lib/types";
+} from "@/lib/types";
 
 // Clerk
 import { currentUser } from "@clerk/nextjs/server";
@@ -15,7 +14,6 @@ import { currentUser } from "@clerk/nextjs/server";
 // Prisma models
 import { ShippingRate, Store } from "../lib/types";
 import { checkIfUserFollowingStore } from "./product";
-import { userAgent } from "next/server";
 
 // Function: upsertStore
 // Description: Upserts store details into the database, ensuring uniqueness of name,url, email, and phone number.
@@ -255,7 +253,10 @@ export const getStoreShippingRates = async (storeUrl: string) => {
     // Create a map for quick lookup of shipping rates by country ID
     const rateMap = new Map<string, ShippingRate>();
     shippingRates.forEach((rate: ShippingRate) => {
-      rateMap.set(rate.countryId, rate);
+      // Only add to map if countryId is not null
+      if (rate.countryId) { // ✅ Add null check
+        rateMap.set(rate.countryId, rate);
+      }
     });
 
     // Map countries to their shipping rates
@@ -374,7 +375,7 @@ export const getStoreOrders = async (storeUrl: string) => {
 
     // Verify ownership
     if (user.id !== store.userId) {
-      throw new Error("You don't have persmission to access this store.");
+      throw new Error("You don't have permission to access this store.");
     }
 
     // Retrieve order groups for the specified store and user
@@ -385,21 +386,23 @@ export const getStoreOrders = async (storeUrl: string) => {
       include: {
         items: true,
         coupon: true,
-        order: {
+        order: { // ✅ Fixed - only include fields that exist on Order
           select: {
-            paymentStatus: true,
-
-            shippingAddress: {
-              include: {
-                country: true,
-                user: {
-                  select: {
-                    email: true,
-                  },
-                },
-              },
-            },
-            paymentDetails: true,
+            id: true,
+            status: true,
+            totalAmount: true,
+            trackingCode: true,
+            paymentId: true,
+            subTotal: true,
+            shippingFees: true,
+            total: true,
+            createdAt: true,
+            updatedAt: true,
+            userId: true,
+            // Note: Based on your schema, Order doesn't have:
+            // - paymentStatus
+            // - shippingAddress
+            // - paymentDetails
           },
         },
       },

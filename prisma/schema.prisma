@@ -463,6 +463,8 @@ model ShippingAddress {
   countryId String?  @db.ObjectId
   country   Country? @relation("CountryToShippingAddress", fields: [countryId], references: [id])
 
+  orders Order[] @relation("OrderShippingAddress")
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -514,12 +516,23 @@ model Order {
   userId String @db.ObjectId
   user   User   @relation("UserOrders", fields: [userId], references: [id])
 
+  // Add these relations if you need them
+  shippingAddressId String?          @db.ObjectId
+  shippingAddress   ShippingAddress? @relation("OrderShippingAddress", fields: [shippingAddressId], references: [id])
+
+  paymentStatus PaymentStatus @default(Pending)
+
+  paymentDetailsId String?         @db.ObjectId
+  paymentDetails   PaymentDetails? @relation("OrderPaymentDetails", fields: [paymentDetailsId], references: [id])
+
   orderGroups OrderGroup[] @relation("OrderToOrderGroup")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   @@index([userId])
+  @@index([shippingAddressId])
+  @@index([paymentDetailsId])
 }
 
 model OrderGroup {
@@ -679,6 +692,8 @@ model PaymentDetails {
 
   userId String @db.ObjectId
   user   User   @relation("PaymentDetailsToUser", fields: [userId], references: [id])
+
+  orders Order[] @relation("OrderPaymentDetails")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
