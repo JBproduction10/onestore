@@ -43,7 +43,7 @@ export const retrieveProductDetailsOptimized = async (productSlug: string) => {
       },
       freeShipping: {
         include: {
-          eligibaleCountries: {
+          eligibleCountries: {
             include: {
               country: true,
             },
@@ -148,7 +148,7 @@ export const getProductFilteredReviews = async (
   const reviews = await db.review.findMany({
     where: reviewFilter,
     include: {
-      images: true,
+      ReviewImage: true,
       user: true,
     },
     orderBy: sortOption,
@@ -206,20 +206,17 @@ export const getShippingDetails = async (
     });
 
     // Extract shipping details
-    const returnPolicy = shippingRate?.returnPolicy || store.returnPolicy;
-    const shippingService =
-      shippingRate?.shippingService || store.defaultShippingService;
-    const deliveryTimeMin =
-      shippingRate?.deliveryTimeMin || store.defaultDeliveryTimeMin;
-    const deliveryTimeMax =
-      shippingRate?.deliveryTimeMax || store.defaultDeliveryTimeMax;
+    const returnPolicy = store.returnPolicy;
+    const shippingService = store.defaultShippingService;
+    const deliveryTimeMin = store.defaultDeliveryTimeMin;
+    const deliveryTimeMax = store.defaultDeliveryTimeMax;
 
     // Check for free shipping
     let isFreeShipping = false;
     if (freeShippingForAllCountries === true) {
       isFreeShipping = true;
     } else if (freeShipping) {
-      const eligibleCountries = freeShipping.eligibaleCountries;
+      const eligibleCountries = freeShipping.eligibleCountries;
       isFreeShipping = eligibleCountries.some(
         (c: typeof eligibleCountries[0]) => c.countryId === country.id
       );
@@ -241,14 +238,13 @@ export const getShippingDetails = async (
 
     // Determine shipping fees based on method
     const shippingFeePerItem =
-      shippingRate?.shippingFeePerItem || store.defaultShippingFeePerItem;
+      shippingRate?.pricePerItem || store.defaultShippingFeePerItem;
     const shippingFeeForAdditionalItem =
-      shippingRate?.shippingFeeForAdditionalItem ||
       store.defaultShippingFeeForAdditionalItem;
     const shippingFeePerKg =
-      shippingRate?.shippingFeePerKg || store.defaultShippingFeePerKg;
+      shippingRate?.pricePerKg || store.defaultShippingFeePerKg;
     const shippingFeeFixed =
-      shippingRate?.shippingFeeFixed || store.defaultShippingFeeFixed;
+      shippingRate?.fixedPrice || store.defaultShippingFeeFixed;
 
     if (!isFreeShipping) {
       switch (shippingFeeMethod) {

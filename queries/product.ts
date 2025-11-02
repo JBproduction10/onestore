@@ -1,10 +1,11 @@
 "use server";
 
 // DB
-import { db } from "../lib/db";
+import { db } from "@/lib/db";
 
 // Types
 import {
+  Country,
   FreeShippingWithCountriesType,
   ProductPageType,
   ProductShippingDetailsType,
@@ -14,129 +15,63 @@ import {
   SortOrder,
   VariantImageType,
   VariantSimplified,
-} from "../lib/types";
-type ProductVariantType = {
-  id: string;
-  slug: string;
-  variantName: string;
-  images: { url: string }[];
-  sizes: { size: string; price: number; discount: number; quantity: number }[];
-};
-
-type ProductTypeFromQuery = {
-  id: string;
-  slug: string;
-  name: string;
-  rating: number;
-  sales: number;
-  numReviews: number;
-  variants: ProductVariantType[];
-};
-
-// Local types to avoid importing from @prisma/client
-type Size = {
-  id: string;
-  size: string;
-  quantity: number;
-  price: number;
-  discount: number;
-  productVariantId: string;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-type ProductVariant = {
-  id: string;
-  variantName: string;
-  variantDescription: string | null;
-  variantImage: string;
-  slug: string;
-  isSale: boolean;
-  saleEndDate: string | null;
-  sku: string;
-  keywords: string;
-  sales: number;
-  weight: number;
-  productId: string;
-  createdAt: Date;
-  updatedAt: Date;
-  sizes?: Size[];
-  images?: ProductVariantImage[];
-  colors?: Color[];
-  specs?: Spec[];
-};
-
-type ProductVariantImage = {
-  id: string;
-  url: string;
-  alt: string;
-  order: number | null;
-  productVariantId: string;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-type Color = {
-  id: string;
-  name: string;
-  productVariantId: string;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-type Spec = {
-  id: string;
-  name: string;
-  value: string;
-  productId: string | null;
-  variantId: string | null;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-type Store = {
-  id: string;
-  name: string;
-  description: string;
-  email: string;
-  phone: string;
-  url: string;
-  logo: string;
-  cover: string;
-  status: string;
-  averageRating: number;
-  numReviews: number;
-  featured: boolean;
-  returnPolicy: string;
-  defaultShippingService: string;
-  defaultShippingFeePerItem: number;
-  defaultShippingFeeForAdditionalItem: number;
-  defaultShippingFeePerKg: number;
-  defaultShippingFeeFixed: number;
-  defaultDeliveryTimeMin: number;
-  defaultDeliveryTimeMax: number;
-  userId: string;
-  createdAt: Date;
-  updatedAt: Date;
-};
-
-type Country = {
-  id: string;
-  name: string;
-  code: string;
-};
+} from "@/lib/types";
+import { FreeShipping, Prisma, ProductVariant, Size, Store } from "@prisma/client";
 
 // Clerk
 import { currentUser } from "@clerk/nextjs/server";
 
 // Slugify
 import slugify from "slugify";
-import { generateUniqueSlug } from "../lib/utils";
+import { generateUniqueSlug } from "@/lib/utils";
 
 // Cookies
 import { getCookie } from "cookies-next";
 import { cookies } from "next/headers";
 import { setMaxListeners } from "events";
+
+interface ProductFilters {
+  store?: string;
+  productId?: string;
+  category?: string;
+  subCategory?: string;
+  size?: string[];
+  offer?: string;
+  search?: string;
+  minPrice?: number;
+  maxPrice?: number;
+  color?: string[];
+}
+
+type VariantWithSizes = ProductVariant & { sizes: Size[] };
+
+// Define a type for products with variants
+type ProductWithVariants = {
+  variants: VariantWithSizes[];
+  // Add other fields that are used
+  id: string;
+  slug: string;
+  name: string;
+  rating: number;
+  sales: number;
+  numReviews: number;
+};
+
+type ProductByIdResult = {
+  id: string;
+  slug: string;
+  name: string;
+  rating: number;
+  sales: number;
+  variants: Array<{
+    variantId: string;
+    variantName: string;
+    variantSlug: string;
+    images: Array<{ url: string }>;
+    sizes: Size[];
+  }>;
+  variantImages: never[];
+};
 
 // Function: upsertProduct
 // Description: Upserts a product and its variant into the database, ensuring proper association with the store.
@@ -231,13 +166,13 @@ const handleProductCreate = async (
     offerTag: { connect: { id: product.offerTagId } },
     brand: product.brand,
     specs: {
-      create: product.product_specs.map((spec: { name: string, value: string }) => ({
-        name: spec.name,
+      create: product.product_specs.map((spec) => ({
+        key: spec.key,
         value: spec.value,
       })),
     },
     questions: {
-      create: product.questions.map((q: { question: string, answer: string }) => ({
+      create: product.questions.map((q) => ({
         question: q.question,
         answer: q.answer,
       })),
@@ -275,7 +210,7 @@ const handleProductCreate = async (
           },
           specs: {
             create: product.variant_specs.map((spec) => ({
-              name: spec.name,
+              key: spec.key,
               value: spec.value,
             })),
           },
@@ -292,7 +227,9 @@ const handleProductCreate = async (
         product.freeShippingCountriesIds.length > 0
       ? {
           create: {
-            eligibaleCountries: {
+            description: "",
+            countries: [],
+            eligibleCountries: {
               create: product.freeShippingCountriesIds.map((country) => ({
                 country: { connect: { id: country.value } },
               })),
@@ -350,7 +287,7 @@ const handleCreateVariant = async (product: ProductWithVariantType) => {
     },
     specs: {
       create: product.variant_specs.map((spec) => ({
-        name: spec.name,
+        key: spec.key,
         value: spec.value,
       })),
     },
@@ -454,12 +391,12 @@ export const getProductMainInfo = async (productId: string) => {
     offerTagId: product.offerTagId || undefined,
     storeId: product.storeId,
     shippingFeeMethod: product.shippingFeeMethod,
-    questions: product.questions.map((q: { question: string; answer: string }) => ({
+    questions: product.questions.map((q) => ({
       question: q.question,
       answer: q.answer,
     })),
-    product_specs: product.specs.map((spec: { name: string; value: string; }) => ({
-      name: spec.name,
+    product_specs: product.specs.map((spec) => ({
+      name: spec.key,
       value: spec.value,
     })),
   };
@@ -541,7 +478,7 @@ export const deleteProduct = async (productId: string) => {
 //   - pageSize: The number of products per page (default = 10).
 // Returns: An object containing paginated products, filtered variants, and pagination metadata (totalPages, currentPage, pageSize, totalCount).
 export const getProducts = async (
-  filters: Record<string, unknown> = {},
+  filters: ProductFilters = {},
   sortBy = "",
   page: number = 1,
   pageSize: number = 10
@@ -553,7 +490,7 @@ export const getProducts = async (
 
   // Construct the base query
   const wherClause: {
-    AND: Record<string, unknown>[];
+    AND: Array<Record<string, unknown>>;
   } = {
     AND: [],
   };
@@ -676,7 +613,7 @@ export const getProducts = async (
     });
   }
 
-  if (filters.color && Array.isArray(filters.color) && filters.color.length > 0) {
+  if (filters.color && filters.color.length > 0) {
     wherClause.AND.push({
       variants: {
         some: {
@@ -702,31 +639,12 @@ export const getProducts = async (
     case "top-rated":
       orderBy = { rating: "desc" };
       break;
-  default:
+    default:
       orderBy = { views: "desc" };
   }
 
-  // Define a type for the product from the query
-  type ProductWithVariants = {
-    id: string;
-    slug: string;
-    name: string;
-    rating: number;
-    sales: number;
-    numReviews: number;
-    variants: {
-      id: string;
-      slug: string;
-      variantName: string;
-      variantImage: string;
-      images: ProductVariantImage[];
-      sizes: Size[];
-      colors: Color[];
-    }[];
-  };
-
   // Get all filtered, sorted products
-  const products: ProductWithVariants[] = await db.product.findMany({
+  const products = await db.product.findMany({
     where: wherClause,
     orderBy,
     take: limit, // Limit to page size
@@ -746,12 +664,14 @@ export const getProducts = async (
     },
   });
 
+  type VariantWithSizes = ProductVariant & { sizes: Size[] };
+
   // Product price sorting
-  products.sort((a: ProductWithVariants, b: ProductWithVariants) => {
+  products.sort((a, b) => {
     // Helper function to get the minimum price from a product's variants
     const getMinPrice = (product: ProductWithVariants) =>
       Math.min(
-        ...product.variants.flatMap((variant) =>
+        ...product.variants.flatMap((variant: VariantWithSizes) =>
           variant.sizes.map((size) => {
             const discount = size.discount;
             const discountedPrice = size.price * (1 - discount / 100);
@@ -777,7 +697,7 @@ export const getProducts = async (
   });
 
   // Transform the products with filtered variants into ProductCardType structure
-  const productsWithFilteredVariants = products.map((product: ProductWithVariants) => {
+  const productsWithFilteredVariants = products.map((product) => {
     // Filter the variants based on the filters
     const filteredVariants = product.variants;
 
@@ -791,10 +711,14 @@ export const getProducts = async (
     }));
 
     // Extract variant images for the product
-    const variantImages: VariantImageType[] = filteredVariants.map((variant) => ({
-      url: `/product/${product.slug}/${variant.slug}`,
-      image: variant.variantImage || variant.images[0]?.url || '',
-    }));
+    const variantImages: VariantImageType[] = filteredVariants.map(
+      (variant) => ({
+        url: `/product/${product.slug}/${variant.slug}`,
+        image: variant.variantImage
+          ? variant.variantImage
+          : variant.images[0].url,
+      })
+    );
 
     // Return the product in the ProductCardType structure
     return {
@@ -901,14 +825,18 @@ export const retrieveProductDetails = async (
       questions: true,
       reviews: {
         include: {
-          images: true,
+          ReviewImage: true,
           user: true,
         },
         take: 4,
       },
       freeShipping: {
         include: {
-          eligibaleCountries: true,
+          eligibleCountries: {
+            include:{
+              country: true,
+            }
+          },
         },
       },
       variants: {
@@ -947,15 +875,7 @@ export const retrieveProductDetails = async (
 
   return {
     ...product,
-    variantsInfo: variantsInfo.map((variant: {
-      variantName: string;
-      slug: string;
-      variantImage: string;
-      images: ProductVariantImage[];
-      sizes: Size[];
-      colors: Color[];
-      product: { slug: string };
-    }) => ({
+    variantsInfo: variantsInfo.map((variant) => ({
       variantName: variant.variantName,
       variantSlug: variant.slug,
       variantImage: variant.variantImage,
@@ -967,9 +887,9 @@ export const retrieveProductDetails = async (
   };
 };
 
-const getUserCountry = () => {
-  const userCountryCookie = (getCookie("userCountry", { cookies }) as string) || "";
-  const defaultCountry = { name: "United States", code: "US" };
+const getUserCountry = async () => { // ✅ Make it async
+  const userCountryCookie = await getCookie("userCountry", { cookies }) || ""; // ✅ Add await
+  const defaultCountry = { name: "United States", code: "US", city: "" };
 
   try {
     const parsedCountry = JSON.parse(userCountryCookie);
@@ -979,10 +899,16 @@ const getUserCountry = () => {
       "name" in parsedCountry &&
       "code" in parsedCountry
     ) {
-      return parsedCountry;
+      return {
+        name: parsedCountry.name,
+        code: parsedCountry.code,
+        city: parsedCountry.city || "",
+      };
     }
     return defaultCountry;
-  } catch (error) {}
+  } catch (error) {
+    return defaultCountry;
+  }
 };
 
 const formatProductResponse = (
@@ -1028,7 +954,7 @@ const formatProductResponse = (
     colors,
     sizes,
     specs: {
-      product: product.specs,
+      product: product.name,
       variant: variant.specs,
     },
     questions,
@@ -1093,13 +1019,13 @@ export const getRatingStatistics = async (productId: string) => {
     },
   });
   const totalReviews = ratingStats.reduce(
-    (sum: number, stat: { _count: { rating: number } }) => sum + stat._count.rating,
+    (sum, stat) => sum + stat._count.rating,
     0
   );
 
   const ratingCounts = Array(5).fill(0);
 
-  ratingStats.forEach((stat: { rating: number, _count: { rating: number } }) => {
+  ratingStats.forEach((stat) => {
     const rating = Math.floor(stat.rating);
     if (rating >= 1 && rating <= 5) {
       ratingCounts[rating - 1] = stat._count.rating;
@@ -1115,7 +1041,7 @@ export const getRatingStatistics = async (productId: string) => {
     reviewsWithImagesCount: await db.review.count({
       where: {
         productId,
-        images: { some: {} },
+        ReviewImage: { some: {} },
       },
     }),
     totalReviews,
@@ -1132,7 +1058,7 @@ export const getRatingStatistics = async (productId: string) => {
 // Returns: Calculated shipping details.
 export const getShippingDetails = async (
   shippingFeeMethod: string,
-  userCountry: { name: string; code: string; city: string },
+  userCountry: { name: string; code: string; city?: string },
   store: Store,
   freeShipping: FreeShippingWithCountriesType | null
 ) => {
@@ -1146,9 +1072,10 @@ export const getShippingDetails = async (
     returnPolicy: "",
     countryCode: userCountry.code,
     countryName: userCountry.name,
-    city: userCountry.city,
+    city: userCountry.city || "",
     isFreeShipping: false,
   };
+  
   const country = await db.country.findUnique({
     where: {
       name: userCountry.name,
@@ -1165,33 +1092,32 @@ export const getShippingDetails = async (
       },
     });
 
-    const returnPolicy = shippingRate?.returnPolicy || store.returnPolicy;
-    const shippingService =
-      shippingRate?.shippingService || store.defaultShippingService;
+    // These fields only exist on Store, not ShippingRate
+    const returnPolicy = store.returnPolicy;
+    const shippingService = store.defaultShippingService;
+    const deliveryTimeMin = store.defaultDeliveryTimeMin;
+    const deliveryTimeMax = store.defaultDeliveryTimeMax;
+    
+    // Use ShippingRate values if available, otherwise fall back to Store defaults
     const shippingFeePerItem =
-      shippingRate?.shippingFeePerItem || store.defaultShippingFeePerItem;
-    const shippingFeeForAdditionalItem =
-      shippingRate?.shippingFeeForAdditionalItem ||
-      store.defaultShippingFeeForAdditionalItem;
+      shippingRate?.pricePerItem ?? store.defaultShippingFeePerItem;
+    const shippingFeeForAdditionalItem = store.defaultShippingFeeForAdditionalItem;
     const shippingFeePerKg =
-      shippingRate?.shippingFeePerKg || store.defaultShippingFeePerKg;
+      shippingRate?.pricePerKg ?? store.defaultShippingFeePerKg;
     const shippingFeeFixed =
-      shippingRate?.shippingFeeFixed || store.defaultShippingFeeFixed;
-    const deliveryTimeMin =
-      shippingRate?.deliveryTimeMin || store.defaultDeliveryTimeMin;
-    const deliveryTimeMax =
-      shippingRate?.deliveryTimeMax || store.defaultDeliveryTimeMax;
+      shippingRate?.fixedPrice ?? store.defaultShippingFeeFixed;
 
     // Check for free shipping
     if (freeShipping) {
-      const free_shipping_countries = freeShipping.eligibaleCountries;
+      const free_shipping_countries = freeShipping.eligibleCountries; // ✅ Fixed typo
       const check_free_shipping = free_shipping_countries.find(
-        (c: { countryId: string }) => c.countryId === country.id
+        (c) => c.countryId === country.id
       );
       if (check_free_shipping) {
         shippingDetails.isFreeShipping = true;
       }
     }
+    
     shippingDetails = {
       shippingFeeMethod,
       shippingService: shippingService,
@@ -1202,7 +1128,7 @@ export const getShippingDetails = async (
       returnPolicy,
       countryCode: userCountry.code,
       countryName: userCountry.name,
-      city: userCountry.city,
+      city: userCountry.city || "",
       isFreeShipping: shippingDetails.isFreeShipping,
     };
 
@@ -1249,7 +1175,7 @@ export const getProductFilteredReviews = async (
   page: number = 1,
   pageSize: number = 4
 ) => {
-  const reviewFilter: Record<string, unknown> = {
+  const reviewFilter: Prisma.ReviewWhereInput = { // ✅ Changed from 'any'
     productId,
   };
 
@@ -1260,10 +1186,9 @@ export const getProductFilteredReviews = async (
       in: [rating, rating + 0.5],
     };
   }
-
   // Apply image filter if provided
   if (filters.hasImages) {
-    reviewFilter.images = {
+    reviewFilter.ReviewImage = {
       some: {},
     };
   }
@@ -1284,7 +1209,7 @@ export const getProductFilteredReviews = async (
   const reviews = await db.review.findMany({
     where: reviewFilter,
     include: {
-      images: true,
+      ReviewImage: true,
       user: true,
     },
     orderBy: sortOption,
@@ -1299,7 +1224,7 @@ export const getDeliveryDetailsForStoreByCountry = async (
   storeId: string,
   countryId: string
 ) => {
-  // Get shipping rate
+  // Get shipping rate (but it doesn't have the fields we need)
   const shippingRate = await db.shippingRate.findFirst({
     where: {
       countryId,
@@ -1307,36 +1232,22 @@ export const getDeliveryDetailsForStoreByCountry = async (
     },
   });
 
-  let storeDetails;
-  if (!shippingRate) {
-    storeDetails = await db.store.findUnique({
-      where: {
-        id: storeId,
-      },
-      select: {
-        defaultShippingService: true,
-        defaultDeliveryTimeMin: true,
-        defaultDeliveryTimeMax: true,
-      },
-    });
-  }
-
-  const shippingService = shippingRate
-    ? shippingRate.shippingService
-    : storeDetails?.defaultShippingService;
-
-  const deliveryTimeMin = shippingRate
-    ? shippingRate.deliveryTimeMin
-    : storeDetails?.defaultDeliveryTimeMin;
-
-  const deliveryTimeMax = shippingRate
-    ? shippingRate.deliveryTimeMax
-    : storeDetails?.defaultDeliveryTimeMax;
+  // Always get delivery details from Store since ShippingRate doesn't have these fields
+  const storeDetails = await db.store.findUnique({
+    where: {
+      id: storeId,
+    },
+    select: {
+      defaultShippingService: true,
+      defaultDeliveryTimeMin: true,
+      defaultDeliveryTimeMax: true,
+    },
+  });
 
   return {
-    shippingService,
-    deliveryTimeMin,
-    deliveryTimeMax,
+    shippingService: storeDetails?.defaultShippingService,
+    deliveryTimeMin: storeDetails?.defaultDeliveryTimeMin,
+    deliveryTimeMax: storeDetails?.defaultDeliveryTimeMax,
   };
 };
 
@@ -1370,11 +1281,11 @@ export const getProductShippingFee = async (
   if (country) {
     // Check if the user qualifies for free shipping
     if (freeShipping) {
-      const free_shipping_countries = freeShipping.eligibaleCountries;
-      const isEligableForFreeShipping = free_shipping_countries.some(
-        (c: { countryId: string }) => c.countryId === country.name
+      const free_shipping_countries = freeShipping.eligibleCountries;
+      const isEligibleForFreeShipping = free_shipping_countries.some(
+        (c) => c.countryId === country.id
       );
-      if (isEligableForFreeShipping) {
+      if (isEligibleForFreeShipping) {
         return 0; // Free shipping
       }
     }
@@ -1388,12 +1299,13 @@ export const getProductShippingFee = async (
     });
 
     // Destructure the shippingRate with defaults
-    const {
-      shippingFeePerItem = store.defaultShippingFeePerItem,
-      shippingFeeForAdditionalItem = store.defaultShippingFeeForAdditionalItem,
-      shippingFeePerKg = store.defaultShippingFeePerKg,
-      shippingFeeFixed = store.defaultShippingFeeFixed,
-    } = shippingRate || {};
+    const shippingFeePerItem =
+      shippingRate?.pricePerItem ?? store.defaultShippingFeePerItem;
+    const shippingFeeForAdditionalItem = store.defaultShippingFeeForAdditionalItem;
+    const shippingFeePerKg =
+      shippingRate?.pricePerKg ?? store.defaultShippingFeePerKg;
+    const shippingFeeFixed =
+      shippingRate?.fixedPrice ?? store.defaultShippingFeeFixed;
 
     // Calculate the additional quantity (excluding the first item)
     const additionalItemsQty = quantity - 1;
@@ -1420,47 +1332,6 @@ export const getProductShippingFee = async (
   return 0;
 };
 
-type VariantFromQuery = {
-  id: string;
-  variantName: string;
-  slug: string;
-  images: { url: string }[];
-  sizes: Size[];
-  product: {
-    id: string;
-    name: string;
-    slug: string;
-    rating: number;
-    sales: number;
-  };
-};
-
-type VariantInfo = {
-  variantName: string;
-  slug: string;
-  variantImage: string;
-  images: ProductVariantImage[];
-  sizes: Size[];
-  colors: Color[];
-  product: { slug: string };
-};
-
-type ProductById = {
-  id: string;
-  slug: string;
-  name: string;
-  rating: number;
-  sales: number;
-  variants: {
-    variantId: string;
-    variantName: string;
-    variantSlug: string;
-    images: { url: string }[];
-    sizes: Size[];
-  }[];
-  variantImages: [];
-};
-
 /**
  * Retrieves product details based on an array of product ids.
  *
@@ -1473,7 +1344,7 @@ export const getProductsByIds = async (
   ids: string[],
   page: number = 1,
   pageSize: number = 10
-): Promise<{ products: Record<string, unknown>[]; totalPages: number }> => {
+): Promise<{ products: ProductByIdResult[]; totalPages: number }> => { // ✅ Changed from 'any'
   // Check if ids array is empty
   if (!ids || ids.length === 0) {
     throw new Error("Ids are undefined");
@@ -1486,10 +1357,10 @@ export const getProductsByIds = async (
 
   try {
     // Query the database for products with the specified ids
-    const variants: VariantFromQuery[] = await db.productVariant.findMany({
+    const variants = await db.productVariant.findMany({
       where: {
         id: {
-          in: ids, // Filter products whose ids are in the provided array
+          in: ids,
         },
       },
       select: {
@@ -1516,7 +1387,7 @@ export const getProductsByIds = async (
       skip: skip,
     });
 
-    const new_products = variants.map((variant: VariantFromQuery) => ({
+    const new_products = variants.map((variant) => ({
       id: variant.product.id,
       slug: variant.product.slug,
       name: variant.product.name,
@@ -1539,7 +1410,7 @@ export const getProductsByIds = async (
       .map((id) =>
         new_products.find((product) => product.variants[0].variantId === id)
       )
-      .filter((product): product is NonNullable<typeof product> => product !== undefined);
+      .filter((product): product is ProductByIdResult => product !== undefined); // ✅ Better type guard
 
     const allProducts = await db.productVariant.count({
       where: {
@@ -1558,12 +1429,12 @@ export const getProductsByIds = async (
   } catch (error) {
     throw new Error("Failed to fetch products. Please try again.");
   }
-};
+}
 
 const incrementProductViews = async (productId: string) => {
   const isProductAlreadyViewed = getCookie(`viewedProduct_${productId}`, {
     cookies,
-  }) as string;
+  });
 
   if (!isProductAlreadyViewed) {
     await db.product.update({

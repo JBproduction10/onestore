@@ -313,6 +313,12 @@ model ShippingRate {
   fixedPrice   Float
   method       ShippingFeeMethod @default(ITEM)
 
+  // Add these optional fields if you want per-country customization
+  shippingService String?
+  deliveryTimeMin Int?
+  deliveryTimeMax Int?
+  returnPolicy    String?
+
   storeId String @db.ObjectId
   store   Store  @relation("StoreShippingRates", fields: [storeId], references: [id])
 
@@ -331,7 +337,7 @@ model FreeShipping {
   productId String  @unique @db.ObjectId
   product   Product @relation("ProductFreeShipping", fields: [productId], references: [id])
 
-  freeShippingCountries FreeShippingCountry[] @relation("FreeShippingToCountry_FreeShipping")
+  eligibleCountries FreeShippingCountry[] @relation("FreeShippingToCountry_FreeShipping")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -388,13 +394,20 @@ model ReviewImage {
 }
 
 model Cart {
-  id     String     @id @default(auto()) @map("_id") @db.ObjectId
-  userId String     @unique @db.ObjectId
-  user   User       @relation("UserCart", fields: [userId], references: [id])
-  items  CartItem[] @relation("CartToCartItem")
+  id           String     @id @default(auto()) @map("_id") @db.ObjectId
+  userId       String     @unique @db.ObjectId
+  user         User       @relation("UserCart", fields: [userId], references: [id])
+  cartItems    CartItem[] @relation("CartToCartItem")
+  subTotal     Float      @default(0)
+  shippingFees Float      @default(0)
+  total        Float      @default(0)
+  coupon       Coupon?    @relation("CartToCoupon", fields: [couponId], references: [id])
+  couponId     String?    @db.ObjectId
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([couponId])
 }
 
 model CartItem {
@@ -413,6 +426,18 @@ model CartItem {
   sizeId String? @db.ObjectId
   size   Size?   @relation(fields: [sizeId], references: [id])
 
+  productId   String? @db.ObjectId
+  productSlug String?
+  variantId   String?
+  variantSlug String?
+  sku         String?
+  name        String?
+  image       String?
+  sizeName    String?
+  price       Float?
+  shippingFee Float?
+  totalPrice  Float?
+
   createdAt    DateTime    @default(now())
   updatedAt    DateTime    @updatedAt
   OrderGroup   OrderGroup? @relation(fields: [orderGroupId], references: [id])
@@ -424,18 +449,19 @@ model CartItem {
 }
 
 model ShippingAddress {
-  id       String @id @default(auto()) @map("_id") @db.ObjectId
+  id       String  @id @default(auto()) @map("_id") @db.ObjectId
   fullName String
   phone    String
   address  String
   city     String
   postal   String
+  default  Boolean @default(false)
 
   userId String @db.ObjectId
   user   User   @relation("UserShippingAddresses", fields: [userId], references: [id])
 
   countryId String?  @db.ObjectId
-  Country   Country? @relation("CountryToShippingAddress", fields: [countryId], references: [id])
+  country   Country? @relation("CountryToShippingAddress", fields: [countryId], references: [id])
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -481,6 +507,9 @@ model Order {
   status       String  @default("pending")
   trackingCode String?
   paymentId    String?
+  subTotal     Float   @default(0)
+  shippingFees Float   @default(0)
+  total        Float   @default(0)
 
   userId String @db.ObjectId
   user   User   @relation("UserOrders", fields: [userId], references: [id])
@@ -494,7 +523,16 @@ model Order {
 }
 
 model OrderGroup {
-  id String @id @default(auto()) @map("_id") @db.ObjectId
+  id                  String  @id @default(auto()) @map("_id") @db.ObjectId
+  status              String  @default("Pending")
+  subTotal            Float   @default(0)
+  shippingFees        Float   @default(0)
+  total               Float   @default(0)
+  shippingService     String  @default("International Delivery")
+  shippingDeliveryMin Int     @default(7)
+  shippingDeliveryMax Int     @default(30)
+  couponId            String? @db.ObjectId
+  coupon              Coupon? @relation("OrderGroupToCoupon", fields: [couponId], references: [id])
 
   storeId String @db.ObjectId
   store   Store  @relation("OrderGroupToStore", fields: [storeId], references: [id])
@@ -510,6 +548,7 @@ model OrderGroup {
 
   @@index([storeId])
   @@index([orderId])
+  @@index([couponId])
 }
 
 enum ProductStatus {
@@ -613,12 +652,16 @@ model Coupon {
   description String?
   discount    Float
   expiryDate  DateTime
+  startDate   DateTime @default(now())
 
   userId String? @db.ObjectId
   user   User?   @relation("CouponToUser", fields: [userId], references: [id])
 
   storeId String? @db.ObjectId
   store   Store?  @relation("CouponToStore", fields: [storeId], references: [id])
+
+  carts       Cart[]       @relation("CartToCoupon")
+  orderGroups OrderGroup[] @relation("OrderGroupToCoupon")
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

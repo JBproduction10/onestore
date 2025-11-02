@@ -1,8 +1,9 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 "use server";
 
-import { db } from "../lib/db";
-import { CartItem, Country as CountryDB } from "@prisma/client";
-import { CartProductType, CartWithCartItemsType, Country } from "../lib/types";
+import { db } from "@/lib/db";
+import { CartItem, Country as CountryDB, Product, ProductVariant, Store, Size, ProductVariantImage } from "@prisma/client";
+import { CartProductType, CartWithCartItemsType, Country, FreeShippingWithCountriesType } from "@/lib/types";
 import { currentUser } from "@clerk/nextjs/server";
 import { cookies } from "next/headers";
 import {
@@ -11,7 +12,36 @@ import {
   getShippingDetails,
 } from "./product";
 import { ShippingAddress } from "@prisma/client";
-import { getCookie } from "cookies-next";
+
+const getCookie = (name: string, { cookies }: { cookies: ReturnType<typeof cookies> }) => {
+  return cookies.get(name)?.value;
+};
+
+type ProductWithDetails = Product & {
+  store: Store;
+  freeShipping: FreeShippingWithCountriesType | null;
+  variants: (ProductVariant & {
+    sizes: Size[];
+    images: ProductVariantImage[];
+  })[];
+};
+
+type ValidatedCartItem = {
+  productId: string;
+  variantId: string;
+  productSlug: string;
+  variantSlug: string;
+  sizeId: string;
+  storeId: string;
+  sku: string;
+  name: string;
+  image: string;
+  size: string;
+  quantity: number;
+  price: number;
+  shippingFee: number;
+  totalPrice: number;
+};
 
 /**
  * @name followStore
@@ -49,18 +79,18 @@ export const followStore = async (storeId: string): Promise<boolean> => {
     if (!userData) throw new Error("User not found.");
 
     // Check if the user is already following the store
-    const userFollowingStore = await db.user.findFirst({
+    const storeWithFollower = await db.store.findFirst({
       where: {
-        id: user.id,
-        following: {
+        id: storeId,
+        followers: {
           some: {
-            id: storeId,
+            id: user.id,
           },
         },
       },
     });
 
-    if (userFollowingStore) {
+    if (storeWithFollower) {
       // Unfollow the store and return false
       await db.store.update({
         where: {
@@ -142,7 +172,7 @@ export const saveUserCart = async (
           store: true,
           freeShipping: {
             include: {
-              eligibaleCountries: true,
+              eligibleCountries: true,
             },
           },
           variants: {
@@ -182,8 +212,7 @@ export const saveUserCart = async (
         : size.price;
 
       // Calculate Shipping details
-      const cookieStore = cookies();
-      const countryCookie = (await cookieStore).get("userCountry")?.value;
+      const countryCookie = getCookie("userCountry", { cookies });
 
       let details = {
         shippingFee: 0,
@@ -238,12 +267,12 @@ export const saveUserCart = async (
 
   // Recalculate the cart's total price and shipping fees
   const subTotal = validatedCartItems.reduce(
-    (acc, item) => acc + item.price * item.quantity,
+    (acc, item) => acc + (item.price ?? 0) * item.quantity,
     0
   );
 
   const shippingFees = validatedCartItems.reduce(
-    (acc, item) => acc + item.shippingFee,
+    (acc, item) => acc + (item.shippingFee ?? 0),
     0
   );
 
@@ -264,10 +293,13 @@ export const saveUserCart = async (
           name: item.name,
           image: item.image,
           quantity: item.quantity,
-          size: item.size,
+          sizeName: item.size,
           price: item.price,
           shippingFee: item.shippingFee,
           totalPrice: item.totalPrice,
+          store: { connect: { id: item.storeId } },
+          productVariant: { connect: { id: item.variantId } },
+          size: item.sizeId ? { connect: { id: item.sizeId } } : undefined,
         })),
       },
       shippingFees,
@@ -394,7 +426,7 @@ export const placeOrder = async (
 
   // Fetch product, variant, and size data from the database for validation
   const validatedCartItems = await Promise.all(
-    cartItems.map(async (cartProduct: { productId: string; variantId: string; sizeId: string; quantity: number; }) => {
+    cartItems.map(async (cartProduct: { productId: any; variantId: any; sizeId: any; quantity: any; }) => {
       const { productId, variantId, sizeId, quantity } = cartProduct;
 
       // Fetch the product, variant, and size from the database
@@ -406,7 +438,7 @@ export const placeOrder = async (
           store: true,
           freeShipping: {
             include: {
-              eligibaleCountries: true,
+              eligibleCountries: true,
             },
           },
           variants: {
@@ -450,9 +482,12 @@ export const placeOrder = async (
 
       const temp_country = await db.country.findUnique({
         where: {
-          id: countryId,
+          id: countryId ?? undefined,
         },
       });
+      if (!countryId) {
+        throw new Error("Country ID is missing or invalid.");
+      }
 
       if (!temp_country)
         throw new Error("Failed to get Shipping details for order.");
@@ -518,7 +553,7 @@ export const placeOrder = async (
   type GroupedItems = { [storeId: string]: typeof validatedCartItems };
 
   // Group validated items by store
-  const groupedItems = validatedCartItems.reduce<GroupedItems>((acc, item) => {
+  const groupedItems = validatedCartItems.reduce<GroupedItems>((acc: { [x: string]: any[]; }, item: { storeId: string | number; }) => {
     if (!acc[item.storeId]) acc[item.storeId] = [];
     acc[item.storeId].push(item);
     return acc;
@@ -528,11 +563,10 @@ export const placeOrder = async (
   const order = await db.order.create({
     data: {
       userId: userId,
-      shippingAddressId: shippingAddress.id,
-      orderStatus: "Pending",
-      paymentStatus: "Pending",
+      status: "Pending",
       subTotal: 0, // Will calculate below
       shippingFees: 0, // Will calculate below
+      totalAmount: 0, // Will calculate below
       total: 0, // Will calculate below
     },
   });
@@ -544,12 +578,12 @@ export const placeOrder = async (
   for (const [storeId, items] of Object.entries(groupedItems)) {
     // Calculate store-specific totals
     const groupedTotalPrice = items.reduce(
-      (acc, item) => acc + item.totalPrice,
+      (acc: number, item: { totalPrice: number; }) => acc + item.totalPrice,
       0
     );
 
     const groupShippingFees = items.reduce(
-      (acc, item) => acc + item.shippingFee,
+      (acc: number, item: { shippingFee: number; }) => acc + item.shippingFee,
       0
     );
 
@@ -684,7 +718,7 @@ export const updateCartWithLatest = async (
           store: true,
           freeShipping: {
             include: {
-              eligibaleCountries: true,
+              eligibleCountries: true,
             },
           },
           variants: {
@@ -801,7 +835,7 @@ export const addToWishlist = async (
       where: {
         userId,
         productId,
-        variantId,
+        productVariantId: variantId,
       },
     });
 
@@ -813,7 +847,7 @@ export const addToWishlist = async (
       data: {
         userId,
         productId,
-        variantId,
+        productVariantId: variantId,
         sizeId,
       },
     });
@@ -850,7 +884,7 @@ export const updateCheckoutProductstWithLatest = async (
           store: true,
           freeShipping: {
             include: {
-              eligibaleCountries: true,
+              eligibleCountries: true,
             },
           },
           variants: {
@@ -956,12 +990,12 @@ export const updateCheckoutProductstWithLatest = async (
   });
   // Recalculate the cart's total price and shipping fees
   const subTotal = validatedCartItems.reduce(
-    (acc: number, item: { price: number; quantity: number; }) => acc + item.price * item.quantity,
+    (acc, item) => acc + (item.price ?? 0) * item.quantity,
     0
   );
 
   const shippingFees = validatedCartItems.reduce(
-    (acc: number, item: { shippingFee: number; }) => acc + item.shippingFee,
+    (acc, item) => acc + (item.shippingFee ?? 0),
     0
   );
 
@@ -973,18 +1007,18 @@ export const updateCheckoutProductstWithLatest = async (
 
     const currentDate = new Date();
     const startDate = new Date(coupon.startDate);
-    const endDate = new Date(coupon.endDate);
+    const endDate = new Date(coupon.expiryDate);
 
     if (currentDate > startDate && currentDate < endDate) {
       // Check if the coupon applies to any store in the cart
       const applicableStoreItems = validatedCartItems.filter(
-        (item: { storeId: string; }) => item.storeId === coupon.storeId
+        (item) => item.storeId === coupon.storeId
       );
 
       if (applicableStoreItems.length > 0) {
         // Calculate subtotal for the coupon's store (including shipping fees)
         const storeSubTotal = applicableStoreItems.reduce(
-          (acc: number, item: { price: number; quantity: number; shippingFee: number; }) => acc + item.price * item.quantity + item.shippingFee,
+          (acc, item) => acc + item.price * item.quantity + item.shippingFee,
           0
         );
         // Apply coupon discount to the store's subtotal
@@ -1015,5 +1049,5 @@ export const updateCheckoutProductstWithLatest = async (
 
   if (!cart) throw new Error("Somethign went wrong !");
 
-  return cart;
+  return cart as CartWithCartItemsType;
 };

@@ -1,7 +1,7 @@
 import { clerkMiddleware, createRouteMatcher } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
 import { geolocation } from "@vercel/functions";
-import countries from "@/data/countries.json";
+import countries from "./data/countries.json";
 import { Country } from "./lib/types";
 export default clerkMiddleware(async (auth, req, next) => {
   const protectedRoutes = createRouteMatcher([

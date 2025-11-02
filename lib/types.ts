@@ -86,10 +86,10 @@ export type ProductWithVariantType = {
     price: number;
     discount: number;
   }[];
-  product_specs: { id?: string; name: string; value: string }[];
-  variant_specs: { id?: string; name: string; value: string }[];
+  product_specs: { id?: string; key: string; value: string }[];
+  variant_specs: { id?: string; key: string; value: string }[];
   keywords: string[];
-  questions: { id?: string; question: string; answer: string }[];
+  questions: { id?: string; question: string; answer: string | null }[];
   freeShippingForAllCountries: boolean;
   freeShippingCountriesIds: { id?: string; label: string; value: string }[];
   shippingFeeMethod: ShippingFeeMethod;
@@ -219,7 +219,7 @@ export type StatisticsCardType = Prisma.PromiseReturnType<
 >["ratingStatistics"];
 
 export type FreeShippingWithCountriesType = FreeShipping & {
-  eligibaleCountries: FreeShippingCountry[];
+  eligibleCountries: FreeShippingCountry[];
 };
 
 export type CartProductType = {
@@ -509,4 +509,4 @@ export type ProductVariantDataType = {
 };
 
 // Export Prisma models for use in other files
-export { ShippingRate, Store } from "@prisma/client";
+export type { ShippingRate, Store } from "@prisma/client";
